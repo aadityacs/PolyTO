@@ -24,7 +24,7 @@ def project_primitive_sdf_to_density(sdf: jnp.ndarray, mesh:_mesh,
       the entries.
   Returns:
     density: Array of size (num_objects, num_elems) where the values are in
-      range [0,1] where 0 means the mesh element did not intersect with the
+      range [0, 1] where 0 means the mesh element did not intersect with the
       primitive and 1 means it intersected.
   """
   # the sigmoid function has dying gradients for large values of argument.
@@ -33,15 +33,11 @@ def project_primitive_sdf_to_density(sdf: jnp.ndarray, mesh:_mesh,
 
   scale = mesh.lx/order  # we assume lx and ly are roughly in same order
   scaled_sdf = sdf/scale
-  # TODO: Maybe do forward compute with larger sharpness and backward with
-  # smaller sharpness. This makes the density field more accurate while
-  # ensuring gradients aren't dead.
   return jax.nn.sigmoid(-sharpness*scaled_sdf)
 
 
-def compute_union_density_fields(
-    density: jnp.ndarray,
-    penal = 8., x_min = 1e-3) -> jnp.ndarray:
+def compute_union_density_fields(density: jnp.ndarray, penal = 8.,
+                                 x_min = 1e-3) -> jnp.ndarray:
   """Differentiable max function.
 
   Computes the maximum value of array along specified axis.
@@ -70,6 +66,7 @@ def compute_overlapping_volume(sdf: jnp.ndarray, mesh: _mesh)->float:
     sdf: Array of size (num_objects, num_elems) that is the signed distance
       value for each object as for each element on a mesh.
     mesh: A dataclass of `Mesher` which has the `elem_area` and other info.
+  Returns: A float indicating the total volume of overlap between the primitives.
   """
   density = project_primitive_sdf_to_density(sdf, mesh)
   return mesh.elem_area*jnp.sum(jax.nn.relu(jnp.sum(density, axis=0) - 1.))
