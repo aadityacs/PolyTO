@@ -142,6 +142,24 @@ class ConvexBlob:
 
     return ConvexBlob(cx, cy, ang, offset)
 
+def compute_edge_lengths_of_polygons(polygons: ConvexBlob):
+  """Compute the edge lengths of the polygon from the parameterization.
+
+  For detailed derivation see: https://tinyurl.com/y4z5w4nu
+  We have the distances of the hyperplanes from the center and the angles
+  between adjacent lines. We can use this information to compute the length
+  of the edges. A negative value of the length indicates that the line is
+  farther away that it doesn't account as a side of the polygon also. This
+  is useful in imposing minimum feature size constraints.
+  """
+  alpha = 2*np.pi/polygons.num_planes_in_a_blob
+  d_next = jnp.roll(polygons.face_offset, -1, axis=1)
+  d_prev = jnp.roll(polygons.face_offset, 1, axis=1)
+
+  edge_lengths = ((d_next + d_prev - 2*polygons.face_offset*jnp.cos(alpha))/
+                  jnp.sin(alpha))
+  
+  return edge_lengths
 
 def init_blob_grid(nx: int, ny: int, blob_extents: BlobExtents):
   """
@@ -191,10 +209,12 @@ def init_random_blobs(blob_extents:BlobExtents, seed: int = 27):
             minval=blob_extents.min_angle_offset, maxval=blob_extents.max_angle_offset)
   off = jax.random.uniform(offkey, (blob_extents.num_blobs, blob_extents.num_planes_in_a_blob),
             minval=blob_extents.min_face_offset, maxval=blob_extents.max_face_offset)
-  mean_offset = 0.5*(blob_extents.min_face_offset + blob_extents.max_face_offset)
+  mean_offset = 0.015*blob_extents.max_face_offset#(blob_extents.min_face_offset + blob_extents.max_face_offset)
   off = mean_offset*jnp.ones((blob_extents.num_blobs, blob_extents.num_planes_in_a_blob))
   return ConvexBlob(cx, cy, ang, off)
 
+def intersection_r_func(f1, f2):
+  return f1 + f2 + jnp.sqrt(f1**2 + f2**2)
 
 def compute_blob_sdf(blobs: ConvexBlob, mesh: _mesh, use_true_max = False,
                      order = 100.):
@@ -222,7 +242,7 @@ def compute_blob_sdf(blobs: ConvexBlob, mesh: _mesh, use_true_max = False,
   dist_planes = (nrml_dot_x - blobs.face_offset[:, :, np.newaxis])
 
   # implementation issue: The logsumexp has numerical under/over flow issue. To
-  # counter this we scale our distances to be roughly by `order`` to be 
+  # counter this we scale our distances to be roughly by `order` to be 
   # [-order, order]. We multiply the scaling factor outside of LSE and thus
   # get back the correct SDF. This is purely an implementation trick.
   scaling = mesh.lx/order   # we assume lx and ly are roughly in same order
@@ -232,7 +252,11 @@ def compute_blob_sdf(blobs: ConvexBlob, mesh: _mesh, use_true_max = False,
   if use_true_max:
     sdf = jnp.amax(dist_planes, axis=1)
   else:
-    sdf = scaling*jax.scipy.special.logsumexp(dist_planes/scaling, axis=1)
+    print('hellloooo')
+    sdf = dist_planes[:,0,:]  # size (num_blobs, num_elems)
+    for side in range(blobs.num_planes_in_a_blob-1):
+      sdf = sdf.at[:, :].set(intersection_r_func(sdf, dist_planes[:,side+1,:]))
+    # sdf = scaling*jax.scipy.special.logsumexp(dist_planes/scaling, axis=1)
   return sdf
 
 def impose_blob_symmetry(blob: ConvexBlob):
@@ -267,8 +291,7 @@ def dilate_blob(blob: ConvexBlob, thickness: float):
   Args:
     blob: The input set of blobs which are to be eroded.
     thickness: A positive number that indicates the thickness to which dilate the
-      blobs by. When the thickness exceeds to offset of a face, the offset is
-      clipped to zero
+      blobs by.
   Returns: A new `ConvexBlob` with the offsets of all the blobs and each
     plane of the blob dilated by the specified thickness.
   """

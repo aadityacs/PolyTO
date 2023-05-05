@@ -42,4 +42,7 @@ class Mesher:
     [x_grid, y_grid] = np.meshgrid(
                np.linspace(dx/2., self.lx-dx/2., nelx),
                np.linspace(dy/2., self.ly-dy/2., nely))
+    [x_grid, y_grid] = np.meshgrid(
+               np.linspace(self.bounding_box.x_min + dx/2., self.bounding_box.x_max-dx/2., nelx),
+               np.linspace(self.bounding_box.y_min + dy/2., self.bounding_box.y_max-dy/2., nely))
     self.elem_centers = np.stack((x_grid, y_grid)).T.reshape(-1, self.num_dim)

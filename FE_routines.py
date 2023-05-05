@@ -74,24 +74,29 @@ class FEA:
     
     matrx_size = self.mesh.num_elems*self.dofs_per_elem**2
     iK = np.kron( edofMat , np.ones((self.dofs_per_elem,1),dtype=int) ).T\
-        .reshape( matrx_size, order ='F' )
+        .reshape( matrx_size, order ='F')
     jK = np.kron( edofMat , np.ones((1,self.dofs_per_elem),dtype=int) ).T\
-        .reshape( matrx_size , order ='F' )
+        .reshape( matrx_size , order ='F')
     return elem_node, edofMat, iK, jK
   #---------------#
   def compute_elem_stiffness_matrix(self, density: jnp.ndarray, 
-                                    penal = 3.)->jnp.ndarray:
+                                    penal = 3., rho_min = 1e-2)->jnp.ndarray:
     """
     Args:
       density: Array of size (num_elems,) which is the density of each of the
         element. The entries are in [0,1] where 0 means the element is void
         and 1 means the element is filled with material.
+        penal: SIMP penalty parameter
+        rho_min: A small value added to the density to ensure that the values are
+          slightly greater than zero. This is done to ensure numerical stability
+          during the simulation
     Returns: Array of size (num_elems, 8, 8) which is the structual
       stiffness matrix of each of the bilinear quad elements. Each element has
       8 dofs corresponding to the x and y displacements of the 4 noded quad
       element.
     """
-    penalized_dens =  0.01 +density**penal
+    penalized_dens =  rho_min + density**penal
+    # e - element, i - elem_nodes j - elem_nodes
     return jnp.einsum('e, ij->ije', penalized_dens, self.D0)
   #-----------------------#
   def assemble_stiffness_matrix(self, elem_stiff_mtrx: jnp.ndarray):
@@ -118,16 +123,6 @@ class FEA:
     """
     k_free = glob_stiff_mtrx[self.bc.free_dofs,:][:,self.bc.free_dofs]
 
-    # using lu decomposition
-    # lu = jax.scipy.linalg.lu_factor(k_free, check_finite=False)
-    # u_free = jax.scipy.linalg.lu_solve(lu, self.bc.force[self.bc.free_dofs])
-
-    # using cholesky decomposition
-    # cho_factor = jax.scipy.linalg.cho_factor(k_free)
-    # u_free = jax.scipy.linalg.cho_solve(cho_factor, 
-    #             self.bc.force[self.bc.free_dofs], check_finite=False)
-
-    # using solve
     u_free = jax.scipy.linalg.solve(
           k_free,
           self.bc.force[self.bc.free_dofs], \
@@ -157,7 +152,7 @@ class FEA:
     elem_stiffness_mtrx = self.compute_elem_stiffness_matrix(density)
     glob_stiff_mtrx = self.assemble_stiffness_matrix(elem_stiffness_mtrx)
     u = self.solve(glob_stiff_mtrx)
-    return self.compute_compliance(u), u
+    return self.compute_compliance(u)
   #-----------------------#
   def plot_displacement(self, u, density = None):
     elemDisp = u[self.edofMat].reshape(self.mesh.nelx*self.mesh.nely, 8)
