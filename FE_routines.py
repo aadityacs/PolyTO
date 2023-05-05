@@ -4,10 +4,15 @@ import jax
 from mesher import Mesher
 from typing import Tuple
 import dataclasses
-import matplotlib.pyplot as plt
 
 @dataclasses.dataclass
 class BC:
+  """
+  Attributes:
+    force: Array of size (num_dofs,) that contain the imposed load on each dof.
+    fixed_dofs: Array of size (num_fixed_dofs,) that contain all the dof numbers
+      that are fixed.
+  """
   force: np.ndarray
   fixed_dofs: np.ndarray
 
@@ -21,13 +26,21 @@ class BC:
 
 @dataclasses.dataclass
 class Material:
-  E: float = 1.
-  nu: float = 0.3
-  rho_min: float = 1e-3
+  """ Linear elasticity material constants.
+  Attributes:
+    youngs_modulus: The young's modulus of the material.
+    poissons_ratio: The poisson's ratio of the material.
+    delta_youngs_modulus: A small epsilon value of the void material. This is
+      added to ensure numerical stability during finite element analysis.
+  """
+  youngs_modulus: float = 1.
+  poissons_ratio: float = 0.3
+  delta_youngs_modulus: float = 1e-3
 
 #-------------------------#
 
 class FEA:
+  """Linear structural finite element analysis."""
   def __init__(self, mesh: Mesher, material: Material, bc: BC):
     self.mesh, self.material, self.bc = mesh, material, bc
     self.dofs_per_elem, self.num_dofs  = 8, 2*mesh.num_nodes
@@ -36,11 +49,11 @@ class FEA:
         self.compute_connectivity_info()
   #-----------------------#
   def FE_compute_element_stiffness(self) -> np.ndarray:
-    E = self.material.E
-    nu = self.material.nu
-    k = np.array([1/2-nu/6, 1/8+nu/8, -1/4-nu/12, -1/8+3*nu/8,\
+    ym = self.material.youngs_modulus
+    nu = self.material.poissons_ratio
+    k = np.array([1/2-nu/6, 1/8+nu/8, -1/4-nu/12, -1/8+3*nu/8,
                 -1/4+nu/12, -1/8-nu/8, nu/6, 1/8-3*nu/8])
-    D0 = E/(1-nu**2)*np.array([\
+    D0 = ym/(1-nu**2)*np.array([
     [k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7]],
     [k[1], k[0], k[7], k[6], k[5], k[4], k[3], k[2]],
     [k[2], k[7], k[0], k[5], k[6], k[3], k[4], k[1]],
@@ -51,9 +64,10 @@ class FEA:
     [k[7], k[2], k[1], k[4], k[3], k[6], k[5], k[0]] ]).T
     return D0
   #-----------------------#
-  def compute_connectivity_info(self) \
-      -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    elem_node = np.zeros((4, self.mesh.num_elems))
+  def compute_connectivity_info(self)-> Tuple[np.ndarray, np.ndarray,
+                                              np.ndarray, np.ndarray]:
+    nodes_per_elem = 4
+    elem_node = np.zeros((nodes_per_elem, self.mesh.num_elems))
     for elx in range(self.mesh.nelx):
       for ely in range(self.mesh.nely):
         el = ely+elx*self.mesh.nely
@@ -62,42 +76,48 @@ class FEA:
         elem_node[:,el] = np.array([n1+1, n2+1, n2, n1])
     elem_node = elem_node.astype(int)
 
-    edofMat = np.zeros( ( self.mesh.num_elems ,\
-        4*self.mesh.num_dim ), dtype=int )
+    edofMat = np.zeros((self.mesh.num_elems,
+        nodes_per_elem*self.mesh.num_dim), dtype=int)
 
     for elem in range(self.mesh.num_elems):
       enodes = elem_node[:,elem]
-
-      edofs = np.stack( ( 2*enodes , 2*enodes+1 ) , axis=1 )\
-              .reshape( ( 1 , self.dofs_per_elem ) )
+      edofs = np.stack((2*enodes, 2*enodes+1), axis=1).reshape(
+                                            (1, self.dofs_per_elem))
       edofMat[elem,:] = edofs
     
     matrx_size = self.mesh.num_elems*self.dofs_per_elem**2
-    iK = np.kron( edofMat , np.ones((self.dofs_per_elem,1),dtype=int) ).T\
-        .reshape( matrx_size, order ='F' )
-    jK = np.kron( edofMat , np.ones((1,self.dofs_per_elem),dtype=int) ).T\
-        .reshape( matrx_size , order ='F' )
+    iK = (np.kron(edofMat, np.ones((self.dofs_per_elem,1),dtype=int)).T
+                .reshape(matrx_size, order ='F'))
+    jK = (np.kron(edofMat, np.ones((1,self.dofs_per_elem),dtype=int)).T
+                .reshape(matrx_size, order ='F'))
     return elem_node, edofMat, iK, jK
   #---------------#
   def compute_elem_stiffness_matrix(self, density: jnp.ndarray, 
-                                    penal = 3.)->jnp.ndarray:
+                                    penal = 3., rho_min = 1e-2)->jnp.ndarray:
     """
     Args:
       density: Array of size (num_elems,) which is the density of each of the
         element. The entries are in [0,1] where 0 means the element is void
         and 1 means the element is filled with material.
-    Returns: Array of size (num_elems, 8, 8) which is the structual
+        penal: SIMP penalty parameter
+        rho_min: A small value added to the density to ensure that the values are
+          slightly greater than zero. This is done to ensure numerical stability
+          during the simulation
+    Returns: Array of size (8, 8, num_elems) which is the structual
       stiffness matrix of each of the bilinear quad elements. Each element has
       8 dofs corresponding to the x and y displacements of the 4 noded quad
       element.
     """
-    penalized_dens =  0.01 +density**penal
-    return jnp.einsum('e, ij->ije', penalized_dens, self.D0)
+    penalized_dens =  rho_min + density**penal
+    youngs_modulus = (self.material.delta_youngs_modulus +
+                      self.material.youngs_modulus*penalized_dens)
+    # e - element, i - elem_nodes j - elem_nodes
+    return jnp.einsum('e, ij->ije', youngs_modulus, self.D0)
   #-----------------------#
   def assemble_stiffness_matrix(self, elem_stiff_mtrx: jnp.ndarray):
     """
     Args:
-      elem_stiff_mtrx: Array of size (num_elems, 8, 8) which is the structual
+      elem_stiff_mtrx: Array of size (8, 8, num_elems) which is the structual
         stiffness matrix of each of the bilinear quad elements. Each element has
         8 dofs corresponding to the x and y displacements of the 4 noded quad
         element.
@@ -118,16 +138,6 @@ class FEA:
     """
     k_free = glob_stiff_mtrx[self.bc.free_dofs,:][:,self.bc.free_dofs]
 
-    # using lu decomposition
-    # lu = jax.scipy.linalg.lu_factor(k_free, check_finite=False)
-    # u_free = jax.scipy.linalg.lu_solve(lu, self.bc.force[self.bc.free_dofs])
-
-    # using cholesky decomposition
-    # cho_factor = jax.scipy.linalg.cho_factor(k_free)
-    # u_free = jax.scipy.linalg.cho_solve(cho_factor, 
-    #             self.bc.force[self.bc.free_dofs], check_finite=False)
-
-    # using solve
     u_free = jax.scipy.linalg.solve(
           k_free,
           self.bc.force[self.bc.free_dofs], \
@@ -157,21 +167,4 @@ class FEA:
     elem_stiffness_mtrx = self.compute_elem_stiffness_matrix(density)
     glob_stiff_mtrx = self.assemble_stiffness_matrix(elem_stiffness_mtrx)
     u = self.solve(glob_stiff_mtrx)
-    return self.compute_compliance(u), u
-  #-----------------------#
-  def plot_displacement(self, u, density = None):
-    elemDisp = u[self.edofMat].reshape(self.mesh.nelx*self.mesh.nely, 8)
-    elemU = (elemDisp[:,0] + elemDisp[:,2] + elemDisp[:,4] + elemDisp[:,6])/4
-    elemV = (elemDisp[:,1] + elemDisp[:,3] + elemDisp[:,5] + elemDisp[:,7])/4
-    delta = np.sqrt(elemU**2 + elemV**2)
-    x, y = np.mgrid[:self.mesh.nelx, :self.mesh.nely]
-    scale = 0.1*max(self.mesh.nelx, self.mesh.nely)/max(delta)
-    x = x + scale*elemU.reshape(self.mesh.nelx, self.mesh.nely)
-    y = y + scale*elemV.reshape(self.mesh.nelx, self.mesh.nely)
-
-    if density is not None:
-      delta = delta*np.round(density)
-    z = delta.reshape(self.mesh.nelx, self.mesh.nely)
-    im = plt.pcolormesh(x, y, z, cmap='coolwarm')
-    plt.title('deformation')
-    plt.colorbar(im)
+    return self.compute_compliance(u)
