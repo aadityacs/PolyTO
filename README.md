@@ -13,7 +13,7 @@ We propose a topology optimization (TO) framework where the structure is paramet
 @article{chandra2023PolyTO,
 author = {Aaditya Chandrasekhar},
 title = {PolyTO: Structural Topology Optimization with Convex Polygons},
-journal = {arXiv preprint arXiv:0000.00000},
+journal = {arXiv preprint arXiv:2305.04406},
 year={2023}
 }
 ```
