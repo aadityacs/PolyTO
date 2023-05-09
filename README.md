@@ -1,4 +1,4 @@
-# [PolyTO: Topology Optimization using Convex Polygons](https://arxiv.org/abs/0000)
+# [PolyTO: Topology Optimization using Convex Polygons](https://arxiv.org/abs/2305.04406)
 [Aaditya Chandrasekhar](https://aadityacs.github.io/)
 
 [Project page](https://www.aadityacs.com/polyto)
